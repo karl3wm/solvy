@@ -15,6 +15,10 @@ class Polynomial:
             assert storage.shape[1:] == exps.shape
         self.storage = storage
 
+    @property
+    def degrees(self):
+        return [d - 1 for d in self.shape]
+
     @classmethod
     def from_nvars(cls, nvars, degree=2):
         return cls._from_degrees(np.full([nvars], degree+1))
@@ -24,15 +28,17 @@ class Polynomial:
         return cls._from_degrees(np.array(degrees) + 1)
 
     @classmethod
-    def from_data(cls, inputs, outputs, degree=None, overdetermine=False):
+    def from_data(cls, inputs, outputs, approximate=True, degree=None, overdetermine=False):
         assert inputs.shape[0] == outputs.shape[0]
         nvars = inputs.shape[1]
         if degree is None:
             # solve ncoeffs = datapoints = (degree+1)**nvars
-            degree = len(outputs) ** (1./nvars) - 1
+            degree = len(outputs) ** (1./nvars)
             if overdetermine:
                 degree = np.ceil(degree)
-            degree = int(degree)
+            elif approximate:
+                degree /= 2
+            degree = int(degree) - 1
         self = cls.from_nvars(nvars, degree=degree)
         self.solve(inputs, outputs)
         return self
@@ -54,7 +60,13 @@ class Polynomial:
             self.coeffs = np.linalg.solve(rows, outputs)
             self.mse = 0
         else:
-            self.coeffs, self.mse, rank, singulars = np.linalg.lstsq(rows, outputs)
+            # given i only get one mse, there's some way to batch something here
+            self.coeffs, mse, rank, singulars = np.linalg.lstsq(rows, outputs)
+            if nrows > self.ncoeffs:
+                self.mse, = mse
+            else:
+                assert len(mse) == 0
+                self.mse = 0
 
     def __call__(self, values):
         storage = self.storage[0]
@@ -79,8 +91,18 @@ class Polynomial:
         )
         coeffs_nd[slices_zeroed] = 0
 
-    def clone(self):
-        return type(self)(self.exps, self.shape, self.coeffs, mse=self.mse, storage=self.storage)
+    def copy(self):
+        return type(self)(self.exps, self.shape, self.coeffs.copy(), mse=self.mse, storage=self.storage)
+
+    def set(self, other):
+        self.exps = other.exps
+        self.shape = other.shape
+        if self.coeffs.shape == other.coeffs.shape:
+            self.coeffs[:] = other.coeffs
+        else:
+            self.coeffs = other.coeffs.copy()
+        self.mse = other.mse
+        self.storage = other.storage
 
     def __str__(self):
         varnames = 'xyzwabcdefghijklmnopqrstuv'
@@ -97,7 +119,7 @@ class Polynomial:
             else:
                 val = self.coeffs[cidx]
                 val = np.float32(val)
-                if val*val < 1e-6:
+                if val*val < 1e-12:
                     continue
                 if first:
                     first = False
@@ -114,6 +136,8 @@ class Polynomial:
                     out += varnames[vidx]
                     if exp != 1:
                         out += '^' + str(exp)
+        if first:
+            out += '0'
         return out
 
     @classmethod
