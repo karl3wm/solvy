@@ -17,6 +17,12 @@ class NDList:
         self.data[:] = data
     def __getitem__(self, idcs):
         return self.data[idcs]
+    def __setitem__(self, idcs, data):
+        self.data[idcs] = data
+    def __repr__(self):
+        return 'NDList('+repr(self.data)+')'
+    def __str__(self):
+        return str(self.data)
     def _reserve(self, shape):
         capacity = np.stack([self.capacity, shape]).max(axis=0)
         if (capacity != self.capacity).any():
@@ -26,12 +32,23 @@ class NDList:
         else:
             return self.storage
     def resize(self, shape):
-        self.insert_empty(self.shape, shape)
-    def insert_empty(self, where, expansion):
+        shape = np.array(shape)
+        storage = self._reserve(shape)
+        if storage is not self.storage:
+            shared_shape = np.stack([shape, self.shape]).min(axis=0)
+            shared_slice = tuple([slice(0,x) for x in shared_shape])
+            storage[shared_slice] = self.storage[shared_slice]
+            self.storage = storage
+        self.shape = shape
+        self.data = storage[*[slice(0,x) for x in shape]]
+    def _insert_empty(self, where, expansion):
         # resizes the ndlist to prepare for insertion of data,
-        # leaving unallocated regions at where of size expansion
+        # leaving unallocated regions at 'where' of size 'expansion'
         # the unallocated regions form an n-dimensional "+" shape extending in every axis
         # returns a new list of slices over the entire final shape for convenience
+
+        # note: this could support ragged nd data with an additional parameter specifying which axes to shift old data
+
         lower = np.array(where)
         expansion = np.array(expansion)
         upper = lower + expansion
@@ -72,7 +89,7 @@ class NDList:
         insertion_shape = self.shape.copy()
         insertion_shape[axis] = data.shape[axis]
         assert (data.shape == insertion_shape).all()
-        slicelist = self.insert_empty(where, expansion)
+        slicelist = self._insert_empty(where, expansion)
         slicelist[axis] = slice(offset, offset + expansion[axis])
         self.data[*slicelist] = data
 

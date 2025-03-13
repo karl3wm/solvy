@@ -4,23 +4,7 @@ import bisect
 
 import numpy as np
 
-SLICE_ALL = [slice(None)]
-
-def ndarray_resize(old_ndarray, new_shape):
-    # there may be a numpy function for this
-    # could also further generalize into an nd-list w insert/exponential capacity
-    old_shape = old_ndarray.shape
-    #old_length = len(old_ndarray.flat)
-    #new_ndarray = old_ndarray
-    #new_ndarray.resize(new_shape, refcheck=False)
-    #old_ndarray = ndarray.flat[:old_length].reshape(old_shape, copy=False)
-    new_ndarray = np.empty(new_shape, dtype=old_ndarray.dtype)
-    copy_slice = tuple([
-        slice(min(old_shape[idx], new_shape[idx]))
-        for idx in range(min(len(old_shape), len(new_shape)))
-    ])
-    new_ndarray[copy_slice] = old_ndarray[copy_slice]
-    return new_ndarray
+from .ndlist import NDList
 
 class BisectedSlab:
     def __init__(self, n2n_f):
@@ -37,62 +21,58 @@ class BisectedSlab:
         if self.inputs is None:
             # first coord
             self.ninputs = len(inputs)
-            self.inputs = inputs[...,None].copy()
+            self.inputs = NDList(inputs[...,None])
             self._inputs_range = np.arange(self.ninputs)
             outputs = self.f(inputs)
             self.noutputs = len(outputs)
-            self.data = outputs.reshape([1] * self.ninputs + [self.noutputs]).copy()
+            self.data = NDList(outputs.reshape([1] * self.ninputs + [self.noutputs]))
             return outputs
         else:
             # find indices
             idcs = np.empty(self.ninputs,dtype=int)
-            data_shape = list(self.data.shape)
             for idx1 in range(self.ninputs):
                 idx_vals = self.inputs[idx1]
                 input_val = inputs[idx1]
+                data_shape = self.data.shape
                 idx2 = bisect.bisect_left(idx_vals[:data_shape[idx1]], input_val)
                 idcs[idx1] = idx2
                 if idx2 >= len(idx_vals) or idx_vals[idx2] != input_val:
                     # insert new data!
-                    idx2_tail = idx2 + 1
-                    # resize
-                    old_idx_len = data_shape[idx1]
-                    new_idx_len = old_idx_len + 1
-                    data_shape[idx1] = new_idx_len
+
                     # resize inputs and slide up
-                    if self.inputs.shape[-1] < new_idx_len:
-                        inputs_shape = list(self.inputs.shape)
-                        inputs_shape[-1] = new_idx_len * 2
-                        self.inputs = ndarray_resize(self.inputs, inputs_shape)
-                        idx_vals = self.inputs[idx1]
-                    idx_vals[idx2_tail:new_idx_len] = idx_vals[idx2:old_idx_len]
+                        # - this would be very similar to an nd insertion,
+                        #   except that only one axis is slid,
+                        #   rather than all of them
+                        # - it's also like an insertion into a subarray
+                        #   where the outer array storage must be reserved,
+                        #   but only the subarray is slid
+                       # i added a note to NDList._insert_empty about a simple way to generalize to this
+                    self.inputs.resize([
+                        self.ninputs,
+                        max(self.inputs.shape[1], data_shape[idx1] + 1)
+                    ])
+                    idx_vals = self.inputs[idx1]
+                    idx_vals[idx2+1:data_shape[idx1]+1] = idx_vals[idx2:data_shape[idx1]]
                     idx_vals[idx2] = input_val
+
                     # resize data and slide up
-                    self.data = ndarray_resize(self.data, data_shape)
-                    slices = SLICE_ALL * self.ninputs
-                    slices[idx1] = slice(idx2,-1); slice_move_src = tuple(slices)
-                    slices[idx1] = slice(idx2_tail,None); slice_move_dst = tuple(slices)
-                    self.data[slice_move_dst] = self.data[slice_move_src] # nd-move?
+                    insert_where, insert_expansion = np.zeros([2,self.ninputs+1],dtype=int)
+                    insert_where[idx1] = idx2
+                    insert_expansion[idx1] = 1
+                    self.data._insert_empty(insert_where, insert_expansion)
+
                     # place hyperplane of new data values
-                    slices[idx1] = slice(idx2,idx2_tail); slice_insert = tuple(slices)
-                    #iter_vals = self.data[slice_insert]#.reshape([-1, self.noutputs], copy=False)
-                    iter_shape = data_shape[:-1]
+                    iter_shape = list(data_shape[:-1])
                     iter_shape[idx1] = 1
-                    #assert iter_shape == list(iter_vals.shape[:-1])
-                    iter_indices = np.indices(iter_shape) ## no longer making assumption: # presently making the assumption that np.indices presents indices in the same order as .reshape([-1,...])
-                    #iter_vals = self.data[slice_insert]#[tuple(iter_indices)].reshape([-1, self.noutputs],copy=False)
+                    iter_indices = np.indices(iter_shape)
                     iter_indices = iter_indices.T.reshape(-1, self.ninputs)
                     iter_indices[:,idx1] = idx2
-                    #assert iter_vals.shape[0] == iter_indices.shape[0]
                     n_new_vals = iter_indices.shape[0]
                     for idx in range(n_new_vals):
                         idx_inputs = self.inputs[self._inputs_range, iter_indices[idx]]
                         idx_outputs = self.f(idx_inputs)
-                        #iter_vals[idx] = idx_outputs
-                        #iter_vals[iter_indices[idx], self._inputs_range] = idx_outputs
-                        #self.data[iter_indices[idx], self._inputs_range] = idx_outputs
                         self.data[tuple(iter_indices[idx])] = idx_outputs
-                        
+
             return self.data[tuple(idcs)]
 
 
