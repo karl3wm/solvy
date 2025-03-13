@@ -53,7 +53,8 @@ class NDList:
         expansion = np.array(expansion)
         upper = lower + expansion
         old_shape = self.shape
-        new_shape = self.shape + expansion
+        new_shape = np.array(old_shape)
+        new_shape[:len(expansion)] += expansion
         storage = self._reserve(new_shape)
 
         axes_expanding_mask = (expansion != 0)

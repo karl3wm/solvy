@@ -13,10 +13,27 @@ class BisectedSlab:
         self.inputs = None
         self.data = None
         self.noutputs = None
+
     def bounds(self):
         return np.stack([self.inputs[0], self.inputs[self.data.shape[:-1]]])
+
+    def subrange(self, bounds):
+        startends = bounds.T
+        idcs = self._inputs2idcs(startends)
+        return self.data(*[
+            slice(start, end)
+            for start, end in idcs
+        ])
+
+    def _inputs2idcs(self, inputs):
+        return np.stack([
+            np.searchsorted(self.inputs[idx][:self.data.shape[idx]], inputs[idx])
+            for idx in range(self.ninputs)
+        ])
+
     def __call__(self, inputs):
         return self[inputs]
+
     def __getitem__(self, inputs):
         if self.inputs is None:
             # first coord
@@ -29,30 +46,30 @@ class BisectedSlab:
             return outputs
         else:
             # find indices
-            idcs = np.empty(self.ninputs,dtype=int)
+            idcs = self._inputs2idcs(inputs)
+            old_data_shape = self.data.shape
+            if (idcs == self.inputs.shape[1]).any():
+                # i added a note to NDList._insert_empty about a simple way to generalize to inserting an element of ragged data
+                self.inputs.resize([self.ninputs, self.inputs.shape[1]+1])
+            new_input_mask = np.logical_or(
+                idcs >= old_data_shape[:-1] ,#or
+                self.inputs[self._inputs_range, idcs] != inputs
+            )
+            #if new_input_mask.any():
+            #    self.data._insert_empty(idcs, new_input_mask)
+            #    new_data_shape = self.data.shape
+            cur_data_shape = self.data.shape
             for idx1 in range(self.ninputs):
-                idx_vals = self.inputs[idx1]
-                input_val = inputs[idx1]
-                data_shape = self.data.shape
-                idx2 = bisect.bisect_left(idx_vals[:data_shape[idx1]], input_val)
-                idcs[idx1] = idx2
-                if idx2 >= len(idx_vals) or idx_vals[idx2] != input_val:
+                if new_input_mask[idx1]:
                     # insert new data!
+                    input_val = inputs[idx1]
+                    idx2 = idcs[idx1]
 
-                    # resize inputs and slide up
-                        # - this would be very similar to an nd insertion,
-                        #   except that only one axis is slid,
-                        #   rather than all of them
-                        # - it's also like an insertion into a subarray
-                        #   where the outer array storage must be reserved,
-                        #   but only the subarray is slid
-                       # i added a note to NDList._insert_empty about a simple way to generalize to this
-                    self.inputs.resize([
-                        self.ninputs,
-                        max(self.inputs.shape[1], data_shape[idx1] + 1)
-                    ])
+                    # slide up inputs
+                    # i added a note to NDList._insert_empty about a simple way to generalize to inserting an element of ragged data
                     idx_vals = self.inputs[idx1]
-                    idx_vals[idx2+1:data_shape[idx1]+1] = idx_vals[idx2:data_shape[idx1]]
+                    idx_vals[idx2+1:old_data_shape[idx1]+1] = idx_vals[idx2:old_data_shape[idx1]]
+                    # place new input
                     idx_vals[idx2] = input_val
 
                     # resize data and slide up
@@ -60,9 +77,10 @@ class BisectedSlab:
                     insert_where[idx1] = idx2
                     insert_expansion[idx1] = 1
                     self.data._insert_empty(insert_where, insert_expansion)
+                    cur_data_shape = self.data.shape
 
                     # place hyperplane of new data values
-                    iter_shape = list(data_shape[:-1])
+                    iter_shape = list(cur_data_shape[:-1])
                     iter_shape[idx1] = 1
                     iter_indices = np.indices(iter_shape)
                     iter_indices = iter_indices.T.reshape(-1, self.ninputs)
