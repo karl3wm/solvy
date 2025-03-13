@@ -17,13 +17,38 @@ class BisectedSlab:
     def bounds(self):
         return np.stack([self.inputs[0], self.inputs[self.data.shape[:-1]]])
 
-    def subrange(self, bounds):
-        startends = bounds.T
+    def subdata(self, bounds):
+        startends = np.array(bounds).T
         idcs = self._inputs2idcs(startends)
         return self.data(*[
             slice(start, end)
             for start, end in idcs
         ])
+
+    def ensure_density(self, bounds, density):
+        bounds = np.array(bounds)
+        step = (bounds[1] - bounds[0]) / density
+
+        # one extra point is considered to ensure there is something in the area of both endpoints
+        inputslist = np.linspace(bounds[0], bounds[1] + step, density + 2)
+
+        if self.inputs is None:
+            # first data
+            for inputs in inputslist[:-1]:
+                self[inputs]
+        else:
+            idcs = self._inputs2idcs(inputslist.T)
+            # insert data for any idcs that are equal
+            missing_idcs = idcs[:,:-1] == idcs[:,1:]
+
+            # this could likely be optimized
+            for idx1 in range(self.ninputs):
+                for idx2 in range(density + 1):
+                    if missing_idcs[idx1,idx2]:
+                        inputs = self.inputs[:,0].copy()
+                        # new input is calculated by linearly interpolating the entire range
+                        inputs[idx1] = (bounds[:,idx1] * [density-idx2,idx2]).sum() / density
+                        self[inputs] # generate new data
 
     def _inputs2idcs(self, inputs):
         return np.stack([
@@ -31,8 +56,8 @@ class BisectedSlab:
             for idx in range(self.ninputs)
         ])
 
-    def __call__(self, inputs):
-        return self[inputs]
+    def __call__(self, *inputs):
+        return self[np.array(inputs)]
 
     def __getitem__(self, inputs):
         if self.inputs is None:
@@ -48,7 +73,7 @@ class BisectedSlab:
             # find indices
             idcs = self._inputs2idcs(inputs)
             old_data_shape = self.data.shape
-            if (idcs == self.inputs.shape[1]).any():
+            if (old_data_shape[:-1] == self.inputs.shape[1]).any():
                 # i added a note to NDList._insert_empty about a simple way to generalize to inserting an element of ragged data
                 self.inputs.resize([self.ninputs, self.inputs.shape[1]+1])
             new_input_mask = np.logical_or(
@@ -96,9 +121,16 @@ class BisectedSlab:
 
 if __name__ == '__main__':
     sqrtslab2 = BisectedSlab(np.sqrt)
-    assert np.allclose(sqrtslab2(np.array([4,16])), np.array([2,4]))
-    assert np.allclose(sqrtslab2(np.array([4,16])), np.array([2,4]))
-    assert np.allclose(sqrtslab2(np.array([9,4])), np.array([3,2]))
-    assert np.allclose(sqrtslab2(np.array([4,16])), np.array([2,4]))
-    assert np.allclose(sqrtslab2(np.array([25,9])), np.array([5,3]))
-    assert np.allclose(sqrtslab2(np.array([4,16])), np.array([2,4]))
+    assert np.allclose(sqrtslab2(4,16), [2,4])
+    assert np.allclose(sqrtslab2(4,16), [2,4])
+    assert np.allclose(sqrtslab2(9, 4), [3,2])
+    assert np.allclose(sqrtslab2(4,16), [2,4])
+    assert np.allclose(sqrtslab2(25,9), [5,3])
+    assert np.allclose(sqrtslab2(4,16), [2,4])
+    sqrtslab2 = BisectedSlab(np.sqrt)
+    sqrtslab2.ensure_density([[0,0], [4,4]], 2)
+    assert np.allclose(sqrtslab2.inputs.data[:,:3], [[0,2,4], [0,2,4]])
+    sqrtslab2.ensure_density([[0,0], [4,4]], 4)
+    assert np.allclose(sqrtslab2.inputs.data[:,:5], [[0,1,2,3,4], [0,1,2,3,4]])
+    sqrtslab2.ensure_density([[8,10], [10,12]], 4)
+    assert np.allclose(sqrtslab2.inputs.data[:,:10], [[0,1,2,3,4,8,8.5,9,9.5,10], [0,1,2,3,4,10,10.5,11,11.5,12]])
