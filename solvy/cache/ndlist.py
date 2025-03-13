@@ -15,6 +15,8 @@ class NDList:
         self.data = self.storage
         self.resize(data.shape)
         self.data[:] = data
+    def __getitem__(self, idcs):
+        return self.data[idcs]
     def _reserve(self, shape):
         capacity = np.stack([self.capacity, shape]).max(axis=0)
         if (capacity != self.capacity).any():
@@ -23,73 +25,30 @@ class NDList:
             return storage
         else:
             return self.storage
-            #data = storage[*[slice(0,x) for x in self.shape]]
-            #data[:] = self.data
-            #self.data = data
-            #self.storage = storage
-            #self.capacity = capacity
     def resize(self, shape):
-        shape = np.array(shape)
-        storage = self._reserve(shape)
-        if storage is not self.storage:
-            shared_shape = np.stack([shape, self.shape]).min(axis=0)
-            shared_slice = tuple([slice(0,x) for x in shared_shape])
-            storage[shared_slice] = self.storage[shared_slice]
-            self.storage = storage
-        self.shape = shape
-        self.data = storage[*[slice(0,x) for x in shape]]
-        #assert (self.data.shape == shape).all()
+        self.insert_empty(self.shape, shape)
     def insert_empty(self, where, expansion):
         # resizes the ndlist to prepare for insertion of data,
-        # leaving unallocated regions between lower and upper
+        # leaving unallocated regions at where of size expansion
+        # the unallocated regions form an n-dimensional "+" shape extending in every axis
+        # returns a new list of slices over the entire final shape for convenience
         lower = np.array(where)
         expansion = np.array(expansion)
         upper = lower + expansion
         old_shape = self.shape
         new_shape = self.shape + expansion
-        #self.resize(new_shape)
         storage = self._reserve(new_shape)
-        # ok nd expansion.
-        # it has a simple pattern, which i don't know yet but would emerge.
-        # we've done the 1-dimensional case.
-        # formed a slice for all the preceding data, and all the following data
 
-            # so we're inserting a hyperplus shape -- it has a hypercube extending
-            # in every axis along which upper != lower
-            # consider the 2D case -- there are 3 moves performed, one for each
-            # quadrant involved in insertion.
-            # it can also be thought of as 2 successive insertions.
-            # one along one axis -- moving a single large block of data
-            # and a second another another axis -- another single large block
-            # alternatively, it's all the [0,1] combinations of the axes.
-            # if there's a 0, the region is prior to the insert.
-            # if there's a 1, the region is beyond the insert.
         axes_expanding_mask = (expansion != 0)
         axes_expanding_idcs = np.argwhere(axes_expanding_mask)[:,0]
         nexpanding = axes_expanding_idcs.shape[0]
         move_region_idcs = np.indices(np.full(nexpanding,2)).reshape(nexpanding,-1).T
-        #slices = SLICE_ALL * self.ndim
-        slicelist_src_data = [
-            slice(None, old_shape[idx])
-            for idx in range(self.ndim)
-        ]
-        slicelist_dst_data = [
-            slice(None, new_shape[idx])
-            for idx in range(self.ndim)
-        ]
+        slicelist_src_data = [ slice(None, old_shape[idx]) for idx in range(self.ndim) ]
+        slicelist_dst_data = [ slice(None, new_shape[idx]) for idx in range(self.ndim) ]
         for move_region_idx in move_region_idcs:
             slicelist_move_src = list(slicelist_src_data)
             slicelist_move_dst = list(slicelist_dst_data)
             # elements of move_region_idx are 1 for axes needing expansion
-            # no longer: # the first is skipped as it is all 0s. it's the region below lower
-                # potential problem
-                # consider + shape; in a [1,0] or [0,1] quad we want the
-                # [0,lower] range, but
-                # consider | or -- shape. here along one axis we want the
-                # _whole_ range, to move the expanded half. but that's
-                # not [0,lower]; it's [0,None] == [lower,upper]
-                # so there are 3 options: nonincluded, lower, and upper0
-                    # can check with axes_expanding
             for idx in range(nexpanding):
                 axis = axes_expanding_idcs[idx]
                 if move_region_idx[idx]:
