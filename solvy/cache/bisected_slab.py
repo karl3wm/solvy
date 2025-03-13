@@ -25,12 +25,13 @@ class BisectedSlab:
             for start, end in idcs
         ])
 
-    def ensure_density(self, bounds, density):
+    def ensure_density(self, bounds, density, endpoint=False):
         bounds = np.array(bounds)
-        step = (bounds[1] - bounds[0]) / density
-
-        # one extra point is considered to ensure there is something in the area of both endpoints
-        inputslist = np.linspace(bounds[0], bounds[1] + step, density + 2)
+        if endpoint:
+            step = (bounds[1] - bounds[0]) / density
+            inputslist = np.linspace(bounds[0], bounds[1] + step, density + 2)
+        else:
+            inputslist = np.linspace(bounds[0], bounds[1], density + 1)
 
         if self.inputs is None:
             # first data
@@ -43,7 +44,7 @@ class BisectedSlab:
 
             # this could likely be optimized
             for idx1 in range(self.ninputs):
-                for idx2 in range(density + 1):
+                for idx2 in range(len(inputslist) - 1):
                     if missing_idcs[idx1,idx2]:
                         inputs = self.inputs[:,0].copy()
                         # new input is calculated by linearly interpolating the entire range
@@ -128,9 +129,16 @@ if __name__ == '__main__':
     assert np.allclose(sqrtslab2(25,9), [5,3])
     assert np.allclose(sqrtslab2(4,16), [2,4])
     sqrtslab2 = BisectedSlab(np.sqrt)
-    sqrtslab2.ensure_density([[0,0], [4,4]], 2)
+    sqrtslab2.ensure_density([[0,0], [4,4]], 2, endpoint=True)
     assert np.allclose(sqrtslab2.inputs.data[:,:3], [[0,2,4], [0,2,4]])
-    sqrtslab2.ensure_density([[0,0], [4,4]], 4)
+    sqrtslab2.ensure_density([[0,0], [4,4]], 4, endpoint=True)
     assert np.allclose(sqrtslab2.inputs.data[:,:5], [[0,1,2,3,4], [0,1,2,3,4]])
-    sqrtslab2.ensure_density([[8,10], [10,12]], 4)
+    sqrtslab2.ensure_density([[8,10], [10,12]], 4, endpoint=True)
     assert np.allclose(sqrtslab2.inputs.data[:,:10], [[0,1,2,3,4,8,8.5,9,9.5,10], [0,1,2,3,4,10,10.5,11,11.5,12]])
+    sqrtslab2 = BisectedSlab(np.sqrt)
+    sqrtslab2.ensure_density([[0,0], [4,4]], 2, endpoint=False)
+    assert np.allclose(sqrtslab2.inputs.data[:,:2], [[0,2], [0,2]])
+    sqrtslab2.ensure_density([[0,0], [4,4]], 4, endpoint=False)
+    assert np.allclose(sqrtslab2.inputs.data[:,:4], [[0,1,2,3], [0,1,2,3]])
+    sqrtslab2.ensure_density([[8,10], [10,12]], 4, endpoint=False)
+    assert np.allclose(sqrtslab2.inputs.data[:,:8], [[0,1,2,3,8,8.5,9,9.5], [0,1,2,3,10,10.5,11,11.5]])
