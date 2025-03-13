@@ -11,19 +11,59 @@ class BisectedSlab:
         self.f = n2n_f
         self.ninputs = None
         self.inputs = None
-        self.data = None
+        self._data = None
         self.noutputs = None
 
     def bounds(self):
-        return np.stack([self.inputs[0], self.inputs[self.data.shape[:-1]]])
+        return np.stack([self.inputs[:,0], self.inputs[self._inputs_range, self._data.shape[:-1]-1]])
 
-    def subdata(self, bounds):
+    def data(self, bounds=None):
+        startends = (np.array(bounds) if bounds else self.bounds()).T
+        idcs = self._inputs2idcs(startends)
+        densities = idcs[:,1] - idcs[:,0]
+        idcs = np.indices(densities)
+        idcs = (idcs.reshape(self.ninputs,-1).T + idcs[:,0])
+
+        # hum inputs outputs (now just 'data')
+        # also some food interest
+        # thing karl likes to um let calm, he's unsure how
+        outputs = self._data[*idcs.T]
+        return np.concatenate([
+            self.inputs[self._inputs_range, idcs],
+            self._data[*idcs.T],
+        ],axis=1)
+
+#    def outputs(self, bounds=None):
+#        startends = (np.array(bounds) if bounds else self.bounds()).T
+#        idcs = self._inputs2idcs(startends)
+#        return self._data(*[
+#            slice(start, end)
+#            for start, end in idcs
+#        ]).view(-1, self.noutputs)
+#
+#    def inputs(self, bounds, sparse=False):
+#        startends = np.array(bounds).T
+#        idcs = self._inputs2idcs(startends)
+#
+#        if sparse:
+#            return [
+#                self.inputs[idx,slice(*idcs[idx])]
+#                for idx in self.ninputs
+#            ]
+#        else:
+#            # lets start by collecting all the coordinates of the region.
+#            densities = idcs[:,1] - idcs[:,0]
+#            all_idcs = np.indices(densities)
+#            shape = all_idcs.shape[1:]
+#            all_idcs = (all_idcs.reshape(self.ninputs,-1).T + idcs[:,0])
+#
+#            inputs = self.inputs[all_idcs]
+#            return inputs.reshape(*shape, self.ninputs)
+
+    def get_densities(self, bounds):
         startends = np.array(bounds).T
         idcs = self._inputs2idcs(startends)
-        return self.data(*[
-            slice(start, end)
-            for start, end in idcs
-        ])
+        return idcs[:,1] - idcs[:,0]
 
     def ensure_density(self, bounds, density, endpoint=False):
         bounds = np.array(bounds)
@@ -53,7 +93,7 @@ class BisectedSlab:
 
     def _inputs2idcs(self, inputs):
         return np.stack([
-            np.searchsorted(self.inputs[idx][:self.data.shape[idx]], inputs[idx])
+            np.searchsorted(self.inputs[idx][:self._data.shape[idx]], inputs[idx])
             for idx in range(self.ninputs)
         ])
 
@@ -68,12 +108,12 @@ class BisectedSlab:
             self._inputs_range = np.arange(self.ninputs)
             outputs = self.f(inputs)
             self.noutputs = len(outputs)
-            self.data = NDList(outputs.reshape([1] * self.ninputs + [self.noutputs]))
+            self._data = NDList(outputs.reshape([1] * self.ninputs + [self.noutputs]))
             return outputs
         else:
             # find indices
             idcs = self._inputs2idcs(inputs)
-            old_data_shape = self.data.shape
+            old_data_shape = self._data.shape
             if (old_data_shape[:-1] == self.inputs.shape[1]).any():
                 # i added a note to NDList._insert_empty about a simple way to generalize to inserting an element of ragged data
                 self.inputs.resize([self.ninputs, self.inputs.shape[1]+1])
@@ -82,9 +122,9 @@ class BisectedSlab:
                 self.inputs[self._inputs_range, idcs] != inputs
             )
             #if new_input_mask.any():
-            #    self.data._insert_empty(idcs, new_input_mask)
-            #    new_data_shape = self.data.shape
-            cur_data_shape = self.data.shape
+            #    self._data._insert_empty(idcs, new_input_mask)
+            #    new_data_shape = self._data.shape
+            cur_data_shape = self._data.shape
             for idx1 in range(self.ninputs):
                 if new_input_mask[idx1]:
                     # insert new data!
@@ -102,8 +142,8 @@ class BisectedSlab:
                     insert_where, insert_expansion = np.zeros([2,self.ninputs+1],dtype=int)
                     insert_where[idx1] = idx2
                     insert_expansion[idx1] = 1
-                    self.data._insert_empty(insert_where, insert_expansion)
-                    cur_data_shape = self.data.shape
+                    self._data._insert_empty(insert_where, insert_expansion)
+                    cur_data_shape = self._data.shape
 
                     # place hyperplane of new data values
                     iter_shape = list(cur_data_shape[:-1])
@@ -115,9 +155,9 @@ class BisectedSlab:
                     for idx in range(n_new_vals):
                         idx_inputs = self.inputs[self._inputs_range, iter_indices[idx]]
                         idx_outputs = self.f(idx_inputs)
-                        self.data[tuple(iter_indices[idx])] = idx_outputs
+                        self._data[tuple(iter_indices[idx])] = idx_outputs
 
-            return self.data[tuple(idcs)]
+            return self._data[tuple(idcs)]
 
 
 if __name__ == '__main__':
