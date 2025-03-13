@@ -62,11 +62,8 @@ class Polynomial:
         else:
             # given i only get one mse, there's some way to batch something here
             self.coeffs, mse, rank, singulars = np.linalg.lstsq(rows, outputs)
-            if nrows > self.ncoeffs:
-                self.mse, = mse
-            else:
-                assert len(mse) == 0
-                self.mse = 0
+            assert len(mse) < 2
+            self.mse = len(mse) and mse[0]
 
     def __call__(self, values):
         storage = self.storage[0]
