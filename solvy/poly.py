@@ -66,31 +66,69 @@ class Polynomial:
             self.mean_error = 0
         else:
             # this could batch many polynomials at once by simply passing the batch to pinv
-            self.coeffs = np.linalg.pinv(rows) @ outputs
-            diffs = self(inputs) - outputs
+            # would involve making a batched polynomial implementation
+            coeffs = [
+                    np.linalg.pinv(rows,rtol=0) @ outputs,
+                    (outputs @ np.linalg.pinv(rows.T,rtol=0)).T,
+            ]
+            coeffs.append((coeffs[0]+coeffs[1]) / 2)
+            coeffs = np.stack(coeffs)
+            estimates = []
+            for coeff in coeffs:
+                self.coeffs = coeff
+                estimates.append(self(inputs))
+            estimates = np.stack(estimates)
+            diffs = estimates - outputs
+            mse = (diffs * diffs).sum(axis=-1)
+            while True:
+                sorted_idcs = np.argsort(mse)
+                best_idx = sorted_idcs[0]
+                best_coeffs = coeffs[best_idx]
+                new_coeffs = coeffs[sorted_idcs[:-1]].mean(axis = 0)
+                if (new_coeffs == coeffs).all(axis = 1).any(axis = 0):
+                    break
+                new_idx = sorted_idcs[-1]
+                self.coeffs = new_coeffs
+                new_estimates = self(inputs)
+                new_diffs = new_estimates - outputs
+                if (new_diffs == diffs).all(axis = 1).any(axis = 0):
+                    break
+                coeffs[new_idx] = new_coeffs
+                estimates[new_idx] = new_estimates
+                diffs[new_idx] = new_diffs
+                new_mse = (new_diffs * new_diffs).sum(axis=-1)
+                mse[new_idx] = new_mse
+            diffs = diffs[best_idx]
+            self.coeffs = coeffs[best_idx]
 
             # estimate the volume integral of the error
-            # this approach iterates the input, there may be a better way
-            input_voronoi = scipy.spatial.Voronoi(inputs) # this constructs bounding regions with each bounding ridge halfway between nearest points
-                                                          # but at the bounds the ridges go to infinity, represented by a vertex index of -1
-            voronoi_edge_ridges = np.array([pts for pts, verts in input_voronoi.ridge_dict.items() if -1 in verts])
-            voronoi_vertices = input_voronoi.vertices
-            output_weights = []
-            for pt_idx in range(inputs.shape[0]):
-                # this could likely almost all be parallelized using e.g. 2D index masks
+            if self.nvars == 1:
+                # could use storage
+                inps = np.sort(inputs[:,0])
+                bounds = (inps[1:] + inps[:-1]) / 2
+                output_weights = np.concatenate([bounds - inps[:-1], inps[-1:] - bounds[-1:]])
+            else:
+                # this approach iterates the input, there may be a better way
+                input_voronoi = scipy.spatial.Voronoi(inputs) # this constructs bounding regions with each bounding ridge halfway between nearest points
+                                                              # but at the bounds the ridges go to infinity, represented by a vertex index of -1
+                voronoi_edge_ridges = np.array([pts for pts, verts in input_voronoi.ridge_dict.items() if -1 in verts])
+                voronoi_vertices = input_voronoi.vertices
+                output_weights = []
+                for pt_idx in range(inputs.shape[0]):
+                    # this could likely almost all be parallelized using e.g. 2D index masks
 
-                region = input_voronoi.regions[input_voronoi.point_region[pt_idx]]
-                region = np.array(region) # could use storage
-                vertices = voronoi_vertices[region[region != -1]]
-                if len(vertices) < len(region):
-                    # off-the-edge, add bounds
-                    # this could use review/debugging to verify correctness .. for example i seem to be unnecessarily adding some redundant points
-                    edge_ptidx_pairs = voronoi_edge_ridges[np.logical_or(*(voronoi_edge_ridges == pt_idx).T)]
-                    edge_vertices = inputs[edge_ptidx_pairs,:].mean(axis=-1)
-                    vertices = np.concatenate([vertices,edge_vertices,inputs[pt_idx:pt_idx+1]],axis=0)
-                # calculate the volume of the region as the weight
-                output_weights.append(scipy.spatial.ConvexHull(vertices).volume)
-            output_weights = np.array(output_weights)
+                    region = input_voronoi.regions[input_voronoi.point_region[pt_idx]]
+                    region = np.array(region) # could use storage
+                    vertices = voronoi_vertices[region[region != -1]]
+                    if len(vertices) < len(region):
+                        # off-the-edge, add bounds
+                        # this could use review/debugging to verify correctness .. for example i seem to be unnecessarily adding some redundant points
+                        edge_ptidx_pairs = voronoi_edge_ridges[np.logical_or(*(voronoi_edge_ridges == pt_idx).T)]
+                        edge_vertices = inputs[edge_ptidx_pairs,:].mean(axis=-1)
+                        vertices = np.concatenate([vertices,edge_vertices,inputs[pt_idx:pt_idx+1]],axis=0)
+                    # calculate the volume of the region as the weight
+                    output_weights.append(scipy.spatial.ConvexHull(vertices).volume)
+                output_weights = np.stack(output_weights)
             # output_weights now hopefully has the unique units^n volume associated with each input point
             volume_diffs = diffs * output_weights
             total_volume = output_weights.sum()
