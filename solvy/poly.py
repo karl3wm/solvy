@@ -61,9 +61,8 @@ class Polynomial:
             self.mse = 0
         else:
             # given i only get one mse, there's some way to batch something here
-            self.coeffs, mse, rank, singulars = np.linalg.lstsq(rows, outputs)
-            assert len(mse) < 2
-            self.mse = len(mse) and mse[0]
+            self.coeffs, residuals, rank, singulars = np.linalg.lstsq(rows, outputs)
+            self.mse = len(residuals) and (residuals[0] / nrows)
 
     def __call__(self, values):
         storage = self.storage[0]
@@ -136,6 +135,9 @@ class Polynomial:
         if first:
             out += '0'
         return out
+
+    def __repr__(self):
+        return f'Polynomial({repr(self.exps)}, {repr(self.shape)}, coeffs={repr(self.coeffs)}, mse={repr(self.mse)})'
 
     @classmethod
     def _from_degrees(cls, degrees):
