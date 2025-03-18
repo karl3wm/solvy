@@ -1,7 +1,7 @@
 import numpy as np
 
 class Polynomial:
-    def __init__(self, exps, shape, coeffs = None, mse = None, storage = None):
+    def __init__(self, exps, shape, coeffs = None, mse = None, error = None, storage = None):
         self.nvars = exps.shape[0]
         assert exps.reshape((-1,)+shape).shape[0] == self.nvars
         self.shape = shape
@@ -9,8 +9,9 @@ class Polynomial:
         self.ncoeffs = self.exps.shape[1]
         self.coeffs = coeffs
         self.mse = mse
+        self.error = error
         if storage is None:
-            storage = np.empty([1,*self.exps.shape])
+            storage = np.empty([1,*self.exps.shape],dtype=coeffs and coeffs.dtype or np.float64)
         else:
             assert storage.shape[1:] == exps.shape
         self.storage = storage
@@ -48,7 +49,7 @@ class Polynomial:
         assert inputs.shape[1] == self.nvars
         nrows = len(inputs)
         if self.storage.shape[0] < nrows:
-            self.storage = np.empty([nrows,self.nvars,self.ncoeffs])
+            self.storage = np.empty([nrows,self.nvars,self.ncoeffs],dtype=self.storage.dtype)
             storage = self.storage
         else:
             storage = self.storage[:nrows]
@@ -59,18 +60,43 @@ class Polynomial:
         if nrows == self.ncoeffs:
             self.coeffs = np.linalg.solve(rows, outputs)
             self.mse = 0
+            self.error = 0
         else:
-            # given i only get one mse, there's some way to batch something here
+            # given i only get one residual, there's some way to batch something here
             self.coeffs, residuals, rank, singulars = np.linalg.lstsq(rows, outputs)
             self.mse = len(residuals) and (residuals[0] / nrows)
+            self.error = float(np.abs(self(inputs) - outputs).sum())
 
     def __call__(self, values):
-        storage = self.storage[0]
+        assert (len(values.shape) > 0 and values.shape[-1] == self.nvars and len(values.shape) <= 2) or (self.nvars == 1 and len(values.shape) <= 1)
+        if len(values.shape) == 0:
+            # scalar passed to 1-var polynomial
+            nrows = 1
+            out_shape = []
+            values = values.reshape([1,1])
+        elif len(values.shape) == 1:
+            if values.shape[0] == self.nvars:
+                # vector passed to n-var polynomial
+                nrows = 1
+                out_shape = []
+                values = values.reshape([1,self.nvars])
+            else:
+                # many scalars passed to 1-var polynomial
+                nrows = values.shape[0]
+                out_shape = [nrows]
+                values = values.reshape([nrows,1])
+        else:
+            # many vectors passed to n-var polynomial
+            nrows = values.shape[0]
+            out_shape = [nrows]
+        if self.storage.shape[0] < nrows:
+            self.storage = np.empty([nrows,self.nvars,self.ncoeffs],dtype=self.storage.dtype)
+        storage = self.storage[:nrows]
         np.pow(values[...,None], self.exps, out=storage)
-        row = storage[0]
+        row = storage[:,0]
         storage.prod(axis=-2,out=row)
         row *= self.coeffs
-        return row.sum()
+        return row.sum(axis=-1).reshape(out_shape)
 
     def differentiate(self, var_idx):
         # multiply by exponent into coefficient that decrements exponent
@@ -88,7 +114,12 @@ class Polynomial:
         coeffs_nd[slices_zeroed] = 0
 
     def copy(self):
-        return type(self)(self.exps, self.shape, self.coeffs.copy(), mse=self.mse, storage=self.storage)
+        return type(self)(self.exps, self.shape, self.coeffs.copy(), mse=self.mse, error=self.error, storage=self.storage)
+
+    def __eq__(self, other):
+        assert (self.exps == other.exps).all()
+        assert self.shape == other.shape
+        return self.coeffs == other.coeffs
 
     def set(self, other):
         self.exps = other.exps
@@ -98,6 +129,7 @@ class Polynomial:
         else:
             self.coeffs = other.coeffs.copy()
         self.mse = other.mse
+        self.error = other.error
         self.storage = other.storage
 
     def __str__(self):
@@ -137,7 +169,7 @@ class Polynomial:
         return out
 
     def __repr__(self):
-        return f'Polynomial({repr(self.exps)}, {repr(self.shape)}, coeffs={repr(self.coeffs)}, mse={repr(self.mse)})'
+        return f'Polynomial({repr(self.exps)}, {repr(self.shape)}, coeffs={repr(self.coeffs)}, error={self.error})'
 
     @classmethod
     def _from_degrees(cls, degrees):
