@@ -1,7 +1,8 @@
 import numpy as np
+import scipy.spatial
 
 class Polynomial:
-    def __init__(self, exps, shape, coeffs = None, mse = None, error = None, storage = None):
+    def __init__(self, exps, shape, coeffs = None, mse = None, error = None, mean_error = None, storage = None):
         self.nvars = exps.shape[0]
         assert exps.reshape((-1,)+shape).shape[0] == self.nvars
         self.shape = shape
@@ -10,6 +11,7 @@ class Polynomial:
         self.coeffs = coeffs
         self.mse = mse
         self.error = error
+        self.mean_error = mean_error
         if storage is None:
             storage = np.empty([1,*self.exps.shape],dtype=coeffs and coeffs.dtype or np.float64)
         else:
@@ -61,11 +63,41 @@ class Polynomial:
             self.coeffs = np.linalg.solve(rows, outputs)
             self.mse = 0
             self.error = 0
+            self.mean_error = 0
         else:
-            # given i only get one residual, there's some way to batch something here
-            self.coeffs, residuals, rank, singulars = np.linalg.lstsq(rows, outputs)
-            self.mse = len(residuals) and (residuals[0] / nrows)
-            self.error = float(np.abs(self(inputs) - outputs).sum())
+            # this could batch many polynomials at once by simply passing the batch to pinv
+            self.coeffs = np.linalg.pinv(rows) @ outputs
+            diffs = self(inputs) - outputs
+
+            # estimate the volume integral of the error
+            # this approach iterates the input, there may be a better way
+            input_voronoi = scipy.spatial.Voronoi(inputs) # this constructs bounding regions with each bounding ridge halfway between nearest points
+                                                          # but at the bounds the ridges go to infinity, represented by a vertex index of -1
+            voronoi_edge_ridges = np.array([pts for pts, verts in input_voronoi.ridge_dict.items() if -1 in verts])
+            voronoi_vertices = input_voronoi.vertices
+            output_weights = []
+            for pt_idx in range(inputs.shape[0]):
+                # this could likely almost all be parallelized using e.g. 2D index masks
+
+                region = input_voronoi.regions[input_voronoi.point_region[pt_idx]]
+                region = np.array(region) # could use storage
+                vertices = voronoi_vertices[region[region != -1]]
+                if len(vertices) < len(region):
+                    # off-the-edge, add bounds
+                    # this could use review/debugging to verify correctness .. for example i seem to be unnecessarily adding some redundant points
+                    edge_ptidx_pairs = voronoi_edge_ridges[np.logical_or(*(voronoi_edge_ridges == pt_idx).T)]
+                    edge_vertices = inputs[edge_ptidx_pairs,:].mean(axis=-1)
+                    vertices = np.concatenate([vertices,edge_vertices,inputs[pt_idx:pt_idx+1]],axis=0)
+                # calculate the volume of the region as the weight
+                output_weights.append(scipy.spatial.ConvexHull(vertices).volume)
+            output_weights = np.array(output_weights)
+            # output_weights now hopefully has the unique units^n volume associated with each input point
+            volume_diffs = diffs * output_weights
+            total_volume = output_weights.sum()
+            self.mse = float((diffs*volume_diffs).sum() / total_volume)
+            error = np.abs(volume_diffs).sum()
+            self.mean_error = float(error / total_volume)
+            self.error = float(error)
 
     def __call__(self, values):
         assert (len(values.shape) > 0 and values.shape[-1] == self.nvars and len(values.shape) <= 2) or (self.nvars == 1 and len(values.shape) <= 1)
@@ -114,7 +146,7 @@ class Polynomial:
         coeffs_nd[slices_zeroed] = 0
 
     def copy(self):
-        return type(self)(self.exps, self.shape, self.coeffs.copy(), mse=self.mse, error=self.error, storage=self.storage)
+        return type(self)(self.exps, self.shape, self.coeffs.copy(), mse=self.mse, error=self.error, mean_error=self.mean_error, storage=self.storage)
 
     def __eq__(self, other):
         assert (self.exps == other.exps).all()
@@ -169,7 +201,7 @@ class Polynomial:
         return out
 
     def __repr__(self):
-        return f'Polynomial({repr(self.exps)}, {repr(self.shape)}, coeffs={repr(self.coeffs)}, error={self.error})'
+        return f'Polynomial({repr(self.exps)}, {repr(self.shape)}, coeffs={repr(self.coeffs)}, mse={self.mse}, mean_error={self.mean_error})'
 
     @classmethod
     def _from_degrees(cls, degrees):
@@ -201,4 +233,3 @@ if __name__ == '__main__':
         print('df(x,y)/dy =', str(poly))
         poly.differentiate(0)
         print('ddf(x,y)/dydx =', str(poly))
-
